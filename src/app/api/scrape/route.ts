@@ -16,7 +16,7 @@ async function scrapeGoogleMaps(
     minRating: number,
     timeLimit: number
 ): Promise<BusinessData[]> {
-    const browser: Browser = await puppeteer.launch({ headless: false });
+    const browser: Browser = await puppeteer.launch({ headless: true });
     const page: Page = await browser.newPage();
 
     await page.setViewport({
