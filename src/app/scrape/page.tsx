@@ -20,7 +20,8 @@ const Scrape: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSearch = async () => {
+  const handleSubmit = async (e: { preventDefault: () => void; }) => {
+    e.preventDefault();
     setLoading(true);
     setError('');
     try {
@@ -37,77 +38,104 @@ const Scrape: React.FC = () => {
     }
   };
 
+  const handleDownload = () => {
+    const downloadData = {
+      numberOfRecords: results.length,
+      businessType,
+      city,
+      date: new Date().toISOString(),
+      businesses: results
+    };
+
+    const jsonString = JSON.stringify(downloadData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `business_data_${city}_${businessType}_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 p-6">
       <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-4">Business Scraper</h1>
 
-      <div className='w-full flex flex-col justify-center items-center'>
-        <div className="mb-4 w-full max-w-md relative">
-          <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="city">City</label>
-          <input
-            id='city'
-            type="text"
-            placeholder="City"
-            value={city}
-            onChange={(e) => setCity(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
-          />
+      <form onSubmit={handleSubmit} className='w-full'>
+        <div className='w-full flex flex-col justify-center items-center'>
+          <div className="mb-4 w-full max-w-md relative">
+            <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="city">City</label>
+            <input
+              id='city'
+              type="text"
+              placeholder="City"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              required
+              className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
+            />
+          </div>
+          <div className="mb-4 w-full max-w-md relative">
+            <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="business-type">Business Type</label>
+            <input
+              id='business-type'
+              type="text"
+              placeholder="Business Type"
+              value={businessType}
+              onChange={(e) => setBusinessType(e.target.value)}
+              required
+              className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
+            />
+          </div>
+          <div className="mb-4 w-full max-w-md relative">
+            <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="data-limit">Limit</label>
+            <input
+              id='data-limit'
+              type="number"
+              placeholder="Limit"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              required
+              className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
+            />
+          </div>
+          <div className="mb-4 w-full max-w-md relative">
+            <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="min-rating">Minimum Rating</label>
+            <input
+              id='min-rating'
+              type="number"
+              step="0.1"
+              placeholder="Minimum Rating"
+              value={minRating}
+              onChange={(e) => setMinRating(e.target.value)}
+              required
+              className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
+            />
+          </div>
+          <div className="mb-4 w-full max-w-md relative">
+            <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="time-limit">Time Limit (minutes)</label>
+            <input
+              id='time-limit'
+              type="number"
+              placeholder="Time Limit (minutes)"
+              value={timeLimit}
+              onChange={(e) => setTimeLimit(e.target.value)}
+              required
+              className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
+            />
+          </div>
+          <button
+            type='submit'
+            disabled={loading}
+            className={`w-full max-w-md p-3 text-white font-semibold rounded-md shadow-md transition duration-200 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+          >
+            {loading ? 'Scraping...' : 'Search'}
+          </button>
         </div>
-        <div className="mb-4 w-full max-w-md relative">
-          <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="business-type">Business Type</label>
-          <input
-            id='business-type'
-            type="text"
-            placeholder="Business Type"
-            value={businessType}
-            onChange={(e) => setBusinessType(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
-          />
-        </div>
-        <div className="mb-4 w-full max-w-md relative">
-          <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="data-limit">Limit</label>
-          <input
-            id='data-limit'
-            type="number"
-            placeholder="Limit"
-            value={limit}
-            onChange={(e) => setLimit(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
-          />
-        </div>
-        <div className="mb-4 w-full max-w-md relative">
-          <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="min-rating">Minimum Rating</label>
-          <input
-            id='min-rating'
-            type="number"
-            step="0.1"
-            placeholder="Minimum Rating"
-            value={minRating}
-            onChange={(e) => setMinRating(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
-          />
-        </div>
-        <div className="mb-4 w-full max-w-md relative">
-          <label className='absolute -top-3 left-2 text-lg text-white/80 font-bold' htmlFor="time-limit">Time Limit (minutes)</label>
-          <input
-            id='time-limit'
-            type="number"
-            placeholder="Time Limit (minutes)"
-            value={timeLimit}
-            onChange={(e) => setTimeLimit(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:focus:ring-blue-400"
-          />
-        </div>
-      </div>
-
-      <button
-        onClick={handleSearch}
-        disabled={loading}
-        className={`w-full max-w-md p-3 text-white font-semibold rounded-md shadow-md transition duration-200 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
-          }`}
-      >
-        {loading ? 'Scraping...' : 'Search'}
-      </button>
+      </form>
 
       {error && (
         <div className="mt-4 text-red-600 dark:text-red-400">
@@ -117,6 +145,11 @@ const Scrape: React.FC = () => {
 
       {/* {results.length > 0 && ( */}
       <div className="mt-6 w-full min-w-2xl bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-x-auto">
+        <div className="p-4 flex justify-between items-center">
+          <button className='w-full max-w-md p-1.5 text-white font-semibold border border-white mx-auto rounded-md shadow-md transition duration-200 hover:bg-white/60 disabled:bg-white/60 disabled:cursor-not-allowed' type='button' onClick={handleDownload} disabled={results.length > 0 ? false : true}>
+            Download Results
+          </button>
+        </div>
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
           <thead>
             <tr className="bg-gray-100 dark:bg-gray-700">
