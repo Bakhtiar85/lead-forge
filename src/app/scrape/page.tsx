@@ -72,6 +72,7 @@ const Scrape: React.FC = () => {
             setError('Invalid JSON structure: No "businesses" array found.');
           }
         } catch (error) {
+          console.log(error);
           setError('Failed to parse JSON file.');
         }
       };
