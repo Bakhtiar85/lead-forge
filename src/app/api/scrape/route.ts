@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { businessDedupeKey, normalizeListTitle } from '@/lib/businessDedupe';
+import { whatsAppMeHref } from '@/lib/whatsappPhone';
 
 export interface BusinessData {
   name: string | null;
@@ -9,6 +10,9 @@ export interface BusinessData {
   address: string | null;
   phone?: string | null;
   website: string | null;
+  email: string | null;
+  /** https://wa.me/... when digits are valid for a chat link (not a registration check) */
+  whatsappHref: string | null;
 }
 
 function abortError(): Error {
@@ -194,6 +198,36 @@ async function* scrapeGoogleMaps(
                     : null;
                 })(),
                 website: safeGetHref('a[data-tooltip="Open website"]'),
+                email: (() => {
+                  const anchors = document.querySelectorAll('a[href^="mailto:"]');
+                  for (let i = 0; i < anchors.length; i++) {
+                    const href = anchors[i].getAttribute('href');
+                    if (!href) continue;
+                    const addr = decodeURIComponent(
+                      href.replace(/^mailto:/i, '').split('?')[0]
+                    ).trim();
+                    if (addr.indexOf('@') > 0) return addr;
+                  }
+                  const copyEmailBtn = document.querySelector(
+                    'button[data-tooltip="Copy email address"]'
+                  );
+                  if (copyEmailBtn) {
+                    const inner = copyEmailBtn.querySelector('.Io6YTe');
+                    const t = inner
+                      ? inner.textContent?.trim()
+                      : copyEmailBtn.textContent?.trim();
+                    if (t && t.indexOf('@') > 0) return t;
+                  }
+                  const emailAria = document.querySelector(
+                    '[aria-label^="Email:"], [aria-label^="email:"]'
+                  );
+                  if (emailAria) {
+                    const lab = emailAria.getAttribute('aria-label') || '';
+                    const m = lab.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
+                    if (m) return m[0];
+                  }
+                  return null;
+                })(),
               };
             });
 
@@ -203,7 +237,8 @@ async function* scrapeGoogleMaps(
               ratingNum == null ||
               ratingNum >= minRating;
 
-            if (passesMin && raw.name) {
+            const phoneTrimmed = String(raw.phone ?? '').trim();
+            if (passesMin && raw.name && phoneTrimmed) {
               const row: BusinessData = {
                 name: raw.name,
                 rating: ratingNum,
@@ -211,6 +246,11 @@ async function* scrapeGoogleMaps(
                 address: raw.address,
                 phone: raw.phone,
                 website: raw.website,
+                email: raw.email,
+                whatsappHref: whatsAppMeHref(
+                  raw.phone,
+                  process.env.WHATSAPP_DEFAULT_CALLING_CODE ?? null
+                ),
               };
               const dedupeKey = businessDedupeKey(row);
               if (!emittedKeys.has(dedupeKey)) {

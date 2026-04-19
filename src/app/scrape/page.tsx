@@ -1,8 +1,11 @@
 'use client';
 
 import { businessDedupeKey } from '@/lib/businessDedupe';
+import { whatsAppMeHref } from '@/lib/whatsappPhone';
 import Link from 'next/link';
 import React, { useCallback, useRef, useState } from 'react';
+
+const WA_DEFAULT_CC = process.env.NEXT_PUBLIC_WHATSAPP_DEFAULT_CALLING_CODE ?? null;
 
 export interface Business {
   name: string;
@@ -11,6 +14,8 @@ export interface Business {
   address: string | null;
   phone: string | null;
   website: string | null;
+  email: string | null;
+  whatsappHref?: string | null;
 }
 
 function formatRating(b: Business): string {
@@ -19,6 +24,36 @@ function formatRating(b: Business): string {
   }
   if (b.ratingLabel) return b.ratingLabel;
   return '—';
+}
+
+function hydrateRow(row: Business): Business {
+  return {
+    ...row,
+    email: row.email ?? null,
+    whatsappHref: row.whatsappHref ?? whatsAppMeHref(row.phone, WA_DEFAULT_CC) ?? null,
+  };
+}
+
+function TickCross({
+  ok,
+  labelYes,
+  labelNo,
+}: {
+  ok: boolean;
+  labelYes: string;
+  labelNo: string;
+}) {
+  return (
+    <span
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base font-bold leading-none ${
+        ok ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/15 text-red-400'
+      }`}
+      title={ok ? labelYes : labelNo}
+      aria-label={ok ? labelYes : labelNo}
+    >
+      {ok ? '\u2713' : '\u2717'}
+    </span>
+  );
 }
 
 function parseNdjsonLine(line: string): Business {
@@ -122,12 +157,16 @@ const Scrape: React.FC = () => {
       }
 
       await readNdjsonStream(response, (row) => {
+        const hydrated = hydrateRow(row);
+        if (!hydrated.phone?.trim()) {
+          return;
+        }
         setResults((prev) => {
-          const k = businessDedupeKey(row);
+          const k = businessDedupeKey(hydrated);
           if (prev.some((p) => businessDedupeKey(p) === k)) {
             return prev;
           }
-          return [...prev, row];
+          return [...prev, hydrated];
         });
       });
     } catch (err) {
@@ -167,7 +206,7 @@ const Scrape: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const normalizeUploadedBusiness = (raw: Record<string, unknown>): Business => {
+  const normalizeUploadedBusiness = (raw: Record<string, unknown>): Business | null => {
     let rating: number | null = null;
     const r = raw.rating;
     if (typeof r === 'number' && !Number.isNaN(r)) {
@@ -179,13 +218,27 @@ const Scrape: React.FC = () => {
         if (!Number.isNaN(v)) rating = v;
       }
     }
+
+    const phoneStr = raw.phone != null ? String(raw.phone).trim() : '';
+    if (!phoneStr) {
+      return null;
+    }
+
+    const emailRaw = raw.email != null ? String(raw.email).trim() : '';
+    const email = emailRaw && emailRaw.includes('@') ? emailRaw : null;
+
     return {
       name: String(raw.name ?? ''),
       rating,
       ratingLabel: typeof raw.ratingLabel === 'string' ? raw.ratingLabel : null,
       address: raw.address != null ? String(raw.address) : null,
-      phone: raw.phone != null ? String(raw.phone) : null,
+      phone: phoneStr,
       website: raw.website != null ? String(raw.website) : null,
+      email,
+      whatsappHref:
+        typeof raw.whatsappHref === 'string'
+          ? raw.whatsappHref
+          : whatsAppMeHref(phoneStr, WA_DEFAULT_CC),
     };
   };
 
@@ -199,11 +252,10 @@ const Scrape: React.FC = () => {
             businesses?: unknown[];
           };
           if (parsedData.businesses && Array.isArray(parsedData.businesses)) {
-            setResults(
-              parsedData.businesses.map((b) =>
-                normalizeUploadedBusiness(b as Record<string, unknown>)
-              )
-            );
+            const rows = parsedData.businesses
+              .map((b) => normalizeUploadedBusiness(b as Record<string, unknown>))
+              .filter((b): b is Business => b != null);
+            setResults(rows);
             setError('');
           } else {
             setError('Invalid JSON: expected a "businesses" array.');
@@ -359,8 +411,17 @@ const Scrape: React.FC = () => {
             <div>
               <h2 className="text-base font-semibold text-white">Results</h2>
               <p className="text-sm text-slate-400">
-                {results.length} lead{results.length === 1 ? '' : 's'}
+                {results.length} lead{results.length === 1 ? '' : 's'} (phone required)
                 {loading ? ' · still running…' : ''}
+              </p>
+              <p className="mt-1 max-w-3xl text-xs text-slate-500">
+                Entries without a phone number are skipped. WhatsApp column: ✓ means a valid{' '}
+                <code className="text-slate-400">wa.me</code> link can be built (not proof the account
+                exists on WhatsApp). Email is taken from the Maps panel when Google shows it. For
+                10-digit local numbers set{' '}
+                <code className="text-slate-400">NEXT_PUBLIC_WHATSAPP_DEFAULT_CALLING_CODE</code>{' '}
+                (e.g. <code className="text-slate-400">1</code>) and the same value in{' '}
+                <code className="text-slate-400">WHATSAPP_DEFAULT_CALLING_CODE</code> on the server.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -385,71 +446,119 @@ const Scrape: React.FC = () => {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[960px] table-auto divide-y divide-slate-800 text-left text-sm">
+            <table className="w-full min-w-[1180px] table-auto divide-y divide-slate-800 text-left text-sm">
               <thead className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 text-xs uppercase tracking-wide text-slate-500 backdrop-blur-sm">
                 <tr>
                   <th className="whitespace-nowrap px-4 py-3 sm:px-6">#</th>
                   <th className="whitespace-nowrap px-4 py-3 sm:px-6">Name</th>
                   <th className="whitespace-nowrap px-4 py-3 sm:px-6">Rating</th>
-                  <th className="min-w-[12rem] whitespace-nowrap px-4 py-3 sm:px-6">Website</th>
+                  <th className="min-w-[11rem] whitespace-nowrap px-4 py-3 sm:px-6">Website</th>
                   <th className="whitespace-nowrap px-4 py-3 sm:px-6">Phone</th>
-                  <th className="min-w-[14rem] px-4 py-3 sm:px-6">Address</th>
+                  <th className="whitespace-nowrap px-4 py-3 sm:px-6">WhatsApp</th>
+                  <th className="min-w-[10rem] px-4 py-3 sm:px-6">Email</th>
+                  <th className="min-w-[12rem] px-4 py-3 sm:px-6">Address</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80">
                 {results.length === 0 && !loading && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={8}
                       className="px-4 py-12 text-center text-slate-500 sm:px-6"
                     >
                       Run a search to see leads here. Rows appear as they are scraped.
                     </td>
                   </tr>
                 )}
-                {results.map((business, index) => (
-                  <tr
-                    key={businessDedupeKey(business)}
-                    className="bg-slate-900/20 transition hover:bg-slate-800/40"
-                  >
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-500 sm:px-6">
-                      {index + 1}
-                    </td>
-                    <td className="max-w-[min(28vw,20rem)] truncate px-4 py-3 font-medium text-white sm:px-6">
-                      {business.name}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 sm:px-6">
-                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800/80 px-2.5 py-1 font-medium tabular-nums text-amber-300">
-                        <span aria-hidden>★</span>
-                        {formatRating(business)}
-                      </span>
-                    </td>
-                    <td className="max-w-md truncate px-4 py-3 sm:px-6">
-                      {business.website ? (
-                        <a
-                          href={business.website}
-                          className="text-amber-400/90 underline-offset-2 hover:underline"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {business.website}
-                        </a>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-300 sm:px-6">
-                      {business.phone || <span className="text-slate-500">—</span>}
-                    </td>
-                    <td className="max-w-xl truncate px-4 py-3 text-slate-300 sm:px-6">
-                      {business.address || <span className="text-slate-500">—</span>}
-                    </td>
-                  </tr>
-                ))}
+                {results.map((business, index) => {
+                  const rowKey = businessDedupeKey(business);
+                  const waHref =
+                    business.whatsappHref ?? whatsAppMeHref(business.phone, WA_DEFAULT_CC);
+                  const waOk = Boolean(waHref);
+                  const email = business.email?.trim() || null;
+                  const emailOk = Boolean(email);
+                  return (
+                    <tr
+                      key={rowKey}
+                      className="bg-slate-900/20 transition hover:bg-slate-800/40"
+                    >
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-500 sm:px-6">
+                        {index + 1}
+                      </td>
+                      <td className="max-w-[min(28vw,20rem)] truncate px-4 py-3 font-medium text-white sm:px-6">
+                        {business.name}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 sm:px-6">
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800/80 px-2.5 py-1 font-medium tabular-nums text-amber-300">
+                          <span aria-hidden>★</span>
+                          {formatRating(business)}
+                        </span>
+                      </td>
+                      <td className="max-w-md truncate px-4 py-3 sm:px-6">
+                        {business.website ? (
+                          <a
+                            href={business.website}
+                            className="text-amber-400/90 underline-offset-2 hover:underline"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {business.website}
+                          </a>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-300 sm:px-6">
+                        {business.phone}
+                      </td>
+                      <td className="px-4 py-3 sm:px-6">
+                        <div className="flex items-center gap-3">
+                          <TickCross
+                            ok={waOk}
+                            labelYes="Valid wa.me chat link from this number"
+                            labelNo="Cannot build wa.me link (add country code or default calling code)"
+                          />
+                          {waHref ? (
+                            <a
+                              href={waHref}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-sm font-medium text-emerald-400/95 underline-offset-2 hover:underline"
+                            >
+                              Chat
+                            </a>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="max-w-[14rem] px-4 py-3 sm:px-6">
+                        <div className="flex items-start gap-3">
+                          <TickCross
+                            ok={emailOk}
+                            labelYes="Email found on listing"
+                            labelNo="No email on listing"
+                          />
+                          {email ? (
+                            <a
+                              href={`mailto:${email}`}
+                              className="min-w-0 break-all text-sm text-sky-300 underline-offset-2 hover:underline"
+                            >
+                              {email}
+                            </a>
+                          ) : (
+                            <span className="text-xs text-slate-500">—</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="max-w-xl truncate px-4 py-3 text-slate-300 sm:px-6">
+                        {business.address || <span className="text-slate-500">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {loading && results.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={8}
                       className="px-4 py-8 text-center text-slate-500 sm:px-6"
                     >
                       Waiting for first result…
