@@ -1,9 +1,10 @@
 'use client';
 
 import { businessDedupeKey } from '@/lib/businessDedupe';
+import type { WhatsAppInference } from '@/lib/whatsappPhone';
 import { whatsAppMeHref } from '@/lib/whatsappPhone';
 import Link from 'next/link';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 const WA_DEFAULT_CC = process.env.NEXT_PUBLIC_WHATSAPP_DEFAULT_CALLING_CODE ?? null;
 
@@ -16,6 +17,8 @@ export interface Business {
   website: string | null;
   email: string | null;
   whatsappHref?: string | null;
+  /** Set only after /api/whatsapp-check (headless wa.me); null = not checked yet */
+  whatsappOnApp?: WhatsAppInference | null;
 }
 
 function formatRating(b: Business): string {
@@ -52,6 +55,47 @@ function TickCross({
       aria-label={ok ? labelYes : labelNo}
     >
       {ok ? '\u2713' : '\u2717'}
+    </span>
+  );
+}
+
+function WhatsAppOnAppBadge({ status }: { status: Business['whatsappOnApp'] }) {
+  if (status === 'yes') {
+    return (
+      <TickCross
+        ok
+        labelYes="Check: page suggests this number can be messaged on WhatsApp"
+        labelNo="Not on WhatsApp"
+      />
+    );
+  }
+  if (status === 'no') {
+    return (
+      <TickCross
+        ok={false}
+        labelYes="On WhatsApp"
+        labelNo="Check: page suggests this number is not on WhatsApp"
+      />
+    );
+  }
+  if (status === 'unknown') {
+    return (
+      <span
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-base font-bold leading-none text-amber-300"
+        title="Check ran but the page did not show a clear yes or no (cookie wall, layout change, or rate limit)."
+        aria-label="WhatsApp presence unclear after check"
+      >
+        ?
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-700/70 text-base font-semibold leading-none text-slate-400"
+      title="Not checked yet — green tick was only meaning a wa.me link could be built, not that WhatsApp is installed for this number."
+      aria-label="WhatsApp not checked yet"
+    >
+      –
     </span>
   );
 }
@@ -118,6 +162,13 @@ const Scrape: React.FC = () => {
   const [stoppedByUser, setStoppedByUser] = useState(false);
   const [error, setError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
+  const resultsRef = useRef<Business[]>([]);
+  const [checkingWa, setCheckingWa] = useState<Set<string>>(() => new Set());
+  const [bulkCheckingWa, setBulkCheckingWa] = useState(false);
+
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
 
   const stopScrape = useCallback(() => {
     abortRef.current?.abort();
@@ -185,6 +236,66 @@ const Scrape: React.FC = () => {
     }
   };
 
+  const checkWhatsAppRow = useCallback(async (rowKey: string, phone: string) => {
+    if (!phone.trim()) return;
+    setCheckingWa((prev) => new Set(prev).add(rowKey));
+    setError('');
+    try {
+      const res = await fetch('/api/whatsapp-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const data = (await res.json()) as {
+        status?: WhatsAppInference;
+        whatsappHref?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        setError(data.error || 'WhatsApp check failed');
+        return;
+      }
+      setResults((prev) =>
+        prev.map((r) =>
+          businessDedupeKey(r) === rowKey
+            ? {
+                ...r,
+                whatsappOnApp: data.status ?? 'unknown',
+                whatsappHref: data.whatsappHref ?? r.whatsappHref,
+              }
+            : r
+        )
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'WhatsApp check failed');
+    } finally {
+      setCheckingWa((prev) => {
+        const next = new Set(prev);
+        next.delete(rowKey);
+        return next;
+      });
+    }
+  }, []);
+
+  const checkAllWhatsApp = useCallback(async () => {
+    const rows = resultsRef.current.filter((b) => b.phone?.trim());
+    if (rows.length === 0) return;
+    setBulkCheckingWa(true);
+    setError('');
+    try {
+      for (const b of rows) {
+        if (b.whatsappOnApp === 'yes') continue;
+        const phone = b.phone?.trim();
+        if (!phone) continue;
+        const key = businessDedupeKey(b);
+        await checkWhatsAppRow(key, phone);
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+    } finally {
+      setBulkCheckingWa(false);
+    }
+  }, [checkWhatsAppRow]);
+
   const handleDownload = () => {
     const downloadData = {
       numberOfRecords: results.length,
@@ -227,6 +338,12 @@ const Scrape: React.FC = () => {
     const emailRaw = raw.email != null ? String(raw.email).trim() : '';
     const email = emailRaw && emailRaw.includes('@') ? emailRaw : null;
 
+    let whatsappOnApp: Business['whatsappOnApp'] = null;
+    const waRaw = raw.whatsappOnApp ?? raw.whatsappCheck ?? raw.whatsappRegistered;
+    if (waRaw === 'yes' || waRaw === 'no' || waRaw === 'unknown') {
+      whatsappOnApp = waRaw;
+    }
+
     return {
       name: String(raw.name ?? ''),
       rating,
@@ -239,6 +356,7 @@ const Scrape: React.FC = () => {
         typeof raw.whatsappHref === 'string'
           ? raw.whatsappHref
           : whatsAppMeHref(phoneStr, WA_DEFAULT_CC),
+      whatsappOnApp,
     };
   };
 
@@ -409,19 +527,24 @@ const Scrape: React.FC = () => {
         <section className="flex min-h-0 flex-1 flex-col bg-slate-900/30">
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3 sm:px-6">
             <div>
-              <h2 className="text-base font-semibold text-white">Results</h2>
-              <p className="text-sm text-slate-400">
-                {results.length} lead{results.length === 1 ? '' : 's'} (phone required)
-                {loading ? ' · still running…' : ''}
-              </p>
-              <p className="mt-1 max-w-3xl text-xs text-slate-500">
-                Entries without a phone number are skipped. WhatsApp column: ✓ means a valid{' '}
-                <code className="text-slate-400">wa.me</code> link can be built (not proof the account
-                exists on WhatsApp). Email is taken from the Maps panel when Google shows it. For
-                10-digit local numbers set{' '}
-                <code className="text-slate-400">NEXT_PUBLIC_WHATSAPP_DEFAULT_CALLING_CODE</code>{' '}
-                (e.g. <code className="text-slate-400">1</code>) and the same value in{' '}
-                <code className="text-slate-400">WHATSAPP_DEFAULT_CALLING_CODE</code> on the server.
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold text-white">Results</h2>
+                <p className="text-sm text-slate-400">
+                  {results.length} lead{results.length === 1 ? '' : 's'} (phone required)
+                  {loading ? ' · still running…' : ''}
+                </p>
+              </div>
+
+              <p className="mt-1 max-w-6xl text-xs text-slate-500">
+                Entries without a phone number are skipped. WhatsApp: <strong className="text-slate-400">–</strong>{' '}
+                means not checked yet; use <strong className="text-slate-400">Check</strong> or{' '}
+                <strong className="text-slate-400">Check all WA</strong> to load the public{' '}
+                <code className="text-slate-400">wa.me</code> page in a headless browser — then ✓ / ✗ / ? reflect
+                best-effort text on that page (not an official Meta API, can be wrong). Email comes from Maps when
+                shown. For 10-digit numbers set{' '}
+                <code className="text-slate-400">NEXT_PUBLIC_WHATSAPP_DEFAULT_CALLING_CODE</code> and{' '}
+                <code className="text-slate-400">WHATSAPP_DEFAULT_CALLING_CODE</code> (e.g.{' '}
+                <code className="text-slate-400">1</code>).
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -434,6 +557,14 @@ const Scrape: React.FC = () => {
                   onChange={handleFileUpload}
                 />
               </label>
+              <button
+                type="button"
+                onClick={() => void checkAllWhatsApp()}
+                disabled={results.length === 0 || bulkCheckingWa || loading}
+                className="rounded-xl border border-emerald-600/50 bg-emerald-950/40 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-900/50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {bulkCheckingWa ? 'Checking WA…' : 'Check all WA'}
+              </button>
               <button
                 type="button"
                 onClick={handleDownload}
@@ -474,7 +605,9 @@ const Scrape: React.FC = () => {
                   const rowKey = businessDedupeKey(business);
                   const waHref =
                     business.whatsappHref ?? whatsAppMeHref(business.phone, WA_DEFAULT_CC);
-                  const waOk = Boolean(waHref);
+                  const waChecked = business.whatsappOnApp != null;
+                  const rowChecking = checkingWa.has(rowKey);
+                  const phoneStr = business.phone?.trim() ?? '';
                   const email = business.email?.trim() || null;
                   const emailOk = Boolean(email);
                   return (
@@ -512,21 +645,31 @@ const Scrape: React.FC = () => {
                         {business.phone}
                       </td>
                       <td className="px-4 py-3 sm:px-6">
-                        <div className="flex items-center gap-3">
-                          <TickCross
-                            ok={waOk}
-                            labelYes="Valid wa.me chat link from this number"
-                            labelNo="Cannot build wa.me link (add country code or default calling code)"
-                          />
-                          {waHref ? (
-                            <a
-                              href={waHref}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-sm font-medium text-emerald-400/95 underline-offset-2 hover:underline"
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                          <div className="flex items-center gap-3">
+                            <WhatsAppOnAppBadge status={business.whatsappOnApp ?? null} />
+                            {waHref ? (
+                              <a
+                                href={waHref}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sm font-medium text-emerald-400/95 underline-offset-2 hover:underline"
+                              >
+                                Chat
+                              </a>
+                            ) : (
+                              <span className="text-xs text-slate-500">No wa.me link</span>
+                            )}
+                          </div>
+                          {phoneStr ? (
+                            <button
+                              type="button"
+                              onClick={() => void checkWhatsAppRow(rowKey, phoneStr)}
+                              disabled={rowChecking || bulkCheckingWa}
+                              className="w-fit rounded-lg border border-slate-600 px-2 py-1 text-xs font-medium text-slate-200 transition hover:border-emerald-500/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              Chat
-                            </a>
+                              {rowChecking ? 'Checking…' : waChecked ? 'Re-check' : 'Check'}
+                            </button>
                           ) : null}
                         </div>
                       </td>
